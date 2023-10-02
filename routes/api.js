@@ -1,211 +1,207 @@
 "use strict";
 
-const BoardModel = require("../models").Board;
-const ThreadModel = require("../models").Thread;
-const ReplyModel = require("../models").Reply;
+const Thread = require("../models").Thread;
+const mongoose = require("mongoose");
 
 module.exports = function (app) {
-  app
-    .route("/api/threads/:board")
-    .post((req, res) => {
-      const { text, delete_password } = req.body;
-      let board = req.body.board;
-      if (!board) {
-        board = req.params.board;
+  // POST request to create a new thread
+  app.post("/api/threads/:board", (req, res) => {
+    const { board } = req.params;
+    const { text, delete_password } = req.body;
+    const newThread = new Thread({
+      text,
+      created_on: new Date(),
+      bumped_on: new Date(),
+      reported: false,
+      delete_password,
+      replies: [],
+    });
+
+    newThread.save((err, thread) => {
+      if (err) {
+        console.error(err);
+        res.status(500).send("Internal Server Error");
+      } else {
+        res.redirect(`/b/${board}`);
       }
-      console.log("post", req.body);
-      const newThread = new ThreadModel({
-        text: text,
-        delete_password: delete_password,
-        replies: [],
-      });
-      console.log("newThread", newThread);
-      BoardModel.findOne({ name: board }, (err, Boarddata) => {
-        if (!Boarddata) {
-          const newBoard = new BoardModel({
-            name: board,
-            threads: [],
-          });
-          console.log("newBoard", newBoard);
-          newBoard.threads.push(newThread);
-          newBoard.save((err, data) => {
-            console.log("newBoardData", data);
-            if (err || !data) {
-              console.log(err);
-              res.send("There was an error saving in post");
-            } else {
-              res.json(newThread);
-            }
-          });
+    });
+  });
+
+  // POST request to create a new reply
+  app.post("/api/replies/:board", (req, res) => {
+    const { board } = req.params;
+    const { thread_id, text, delete_password } = req.body;
+
+    Thread.findById(thread_id, (err, thread) => {
+      if (err) {
+        console.error(err);
+        res.status(500).send("Internal Server Error");
+      } else if (!thread) {
+        res.status(404).send("Thread not found");
+      } else {
+        const newReply = {
+          _id: new mongoose.Types.ObjectId(),
+          text,
+          created_on: new Date(),
+          delete_password,
+          reported: false,
+        };
+        thread.replies.push(newReply);
+        thread.bumped_on = new Date();
+
+        thread.save((err) => {
+          if (err) {
+            console.error(err);
+            res.status(500).send("Internal Server Error");
+          } else {
+            res.redirect(`/b/${board}/${thread_id}`);
+          }
+        });
+      }
+    });
+  });
+
+  // GET request to retrieve recent threads
+  app.get("/api/threads/:board", (req, res) => {
+    const { board } = req.params;
+
+    Thread.find({})
+      .sort({ bumped_on: -1 })
+      .limit(10)
+      .exec((err, threads) => {
+        if (err) {
+          console.error(err);
+          res.status(500).send("Internal Server Error");
         } else {
-          Boarddata.threads.push(newThread);
-          Boarddata.save((err, data) => {
-            if (err || !data) {
-              res.send("There was an error saving in post");
-            } else {
-              res.json(newThread);
-            }
-          });
-        }
-      });
-    })
-    .get((req, res) => {
-      const board = req.params.board;
-      BoardModel.findOne({ name: board }, (err, data) => {
-        if (!data) {
-          console.log("No board with this name");
-          res.json({ error: "No board with this name" });
-        } else {
-          console.log("data", data);
-          const threads = data.threads.map((thread) => {
-            const {
-              _id,
-              text,
-              created_on,
-              bumped_on,
-              reported,
-              delete_password,
-              replies,
-            } = thread;
+          threads = threads.map((thread) => {
+            const recentReplies = thread.replies.slice(0, 3).map((reply) => ({
+              _id: reply._id,
+              text: reply.text,
+              created_on: reply.created_on,
+            }));
+
             return {
-              _id,
-              text,
-              created_on,
-              bumped_on,
-              reported,
-              delete_password,
-              replies,
-              replycount: thread.replies.length,
+              _id: thread._id,
+              text: thread.text,
+              created_on: thread.created_on,
+              bumped_on: thread.bumped_on,
+              replies: recentReplies,
             };
           });
+
           res.json(threads);
         }
       });
-    })
-    .put((req, res) => {
-      console.log("put", req.body);
-      const { report_id } = req.body;
-      const board = req.params.board;
-      BoardModel.findOne({ name: board }, (err, boardData) => {
-        if (!boardData) {
-          res.json("error", "Board not found");
-        } else {
-          const date = new Date();
-          let reportedThread = boardData.threads.id(report_id);
-          reportedThread.reported = true;
-          reportedThread.bumped_on = date;
-          boardData.save((err, updatedData) => {
-            res.send("Success");
-          });
-        }
-      });
-    })
-    .delete((req, res) => {
-      console.log("delete", req.body);
-      const { thread_id, delete_password } = req.body;
-      const board = req.params.board;
-      BoardModel.findOne({ name: board }, (err, boardData) => {
-        if (!boardData) {
-          res.json("error", "Board not found");
-        } else {
-          let threadToDelete = boardData.threads.id(thread_id);
-          if (threadToDelete.delete_password === delete_password) {
-            threadToDelete.remove();
-          } else {
-            res.send("Incorrect Password");
-            return;
-          }
-          boardData.save((err, updatedData) => {
-            res.send("Success");
-          });
-        }
-      });
-    });
+  });
 
-  app
-    .route("/api/replies/:board")
-    .post((req, res) => {
-      console.log("thread", req.body);
-      const { thread_id, text, delete_password } = req.body;
-      const board = req.params.board;
-      const newReply = new ReplyModel({
-        text: text,
-        delete_password: delete_password,
-      });
-      BoardModel.findOne({ name: board }, (err, boardData) => {
-        if (!boardData) {
-          res.json("error", "Board not found");
-        } else {
-          const date = new Date();
-          let threadToAddReply = boardData.threads.id(thread_id);
-          threadToAddReply.bumped_on = date;
-          threadToAddReply.replies.push(newReply);
-          boardData.save((err, updatedData) => {
-            res.json(updatedData);
-          });
-        }
-      });
-    })
-    .get((req, res) => {
-      const board = req.params.board;
-      BoardModel.findOne({ name: board }, (err, data) => {
-        if (!data) {
-          console.log("No board with this name");
-          res.json({ error: "No board with this name" });
-        } else {
-          console.log("data", data);
-          const thread = data.threads.id(req.query.thread_id);
-          res.json(thread);
-        }
-      });
-    })
-    .put((req, res) => {
-      //       thread_id: 60898569e083081d56e290cf
-      //       reply_id: 608986aee083081d56e290d0
-      const { thread_id, reply_id } = req.body;
-      const board = req.params.board;
-      BoardModel.findOne({ name: board }, (err, data) => {
-        if (!data) {
-          console.log("No board with this name");
-          res.json({ error: "No board with this name" });
-        } else {
-          console.log("data", data);
-          let thread = data.threads.id(thread_id);
-          let reply = thread.replies.id(reply_id);
-          reply.reported = true;
-          reply.bumped_on = new Date();
-          data.save((err, updatedData) => {
-            if (!err) {
-              res.send("Success");
-            }
-          });
-        }
-      });
-    })
-    .delete((req, res) => {
-      const { thread_id, reply_id, delete_password } = req.body;
-      console.log("delete reply body", req.body);
-      const board = req.params.board;
-      BoardModel.findOne({ name: board }, (err, data) => {
-        if (!data) {
-          console.log("No board with this name");
-          res.json({ error: "No board with this name" });
-        } else {
-          console.log("data", data);
-          let thread = data.threads.id(thread_id);
-          let reply = thread.replies.id(reply_id);
-          if (reply.delete_password === delete_password) {
-            reply.remove();
+  // DELETE request to delete a thread
+  app.delete("/api/threads/:board", (req, res) => {
+    const { board } = req.params;
+    const { thread_id, delete_password } = req.body;
+
+    // Find the thread by ID and check if the delete_password matches
+    Thread.findById(thread_id, (err, thread) => {
+      if (err) {
+        console.error(err);
+        res.status(500).send("Internal Server Error");
+      } else if (!thread) {
+        res.status(404).send("Thread not found");
+      } else if (thread.delete_password !== delete_password) {
+        res.status(400).send("Incorrect Password");
+      } else {
+        // Delete the thread if the password is correct
+        thread.remove((err) => {
+          if (err) {
+            console.error(err);
+            res.status(500).send("Internal Server Error");
           } else {
-            res.send("Incorrect Password");
-            return;
+            res.send("Thread deleted successfully");
           }
-          data.save((err, updatedData) => {
-            if (!err) {
-              res.send("Success");
+        });
+      }
+    });
+  });
+
+  // PUT request to report a thread
+  app.put("/api/threads/:board", (req, res) => {
+    const { board } = req.params;
+    const { thread_id } = req.body;
+
+    // Find the thread by ID and mark it as reported
+    Thread.findByIdAndUpdate(
+      thread_id,
+      { reported: true },
+      { new: true },
+      (err, updatedThread) => {
+        if (err) {
+          console.error(err);
+          res.status(500).send("Internal Server Error");
+        } else if (!updatedThread) {
+          res.status(404).send("Thread not found");
+        } else {
+          res.send("Thread reported");
+        }
+      }
+    );
+  });
+
+  // DELETE request to delete a reply
+  app.delete("/api/replies/:board", (req, res) => {
+    const { board } = req.params;
+    const { thread_id, reply_id, delete_password } = req.body;
+
+    // Find the thread by ID and check if the delete_password matches
+    Thread.findById(thread_id, (err, thread) => {
+      if (err) {
+        console.error(err);
+        res.status(500).send("Internal Server Error");
+      } else if (!thread) {
+        res.status(404).send("Thread not found");
+      } else {
+        // Find the reply by ID within the thread and check the delete_password
+        const reply = thread.replies.find((reply) =>
+          reply._id.equals(reply_id)
+        );
+        if (!reply) {
+          res.status(404).send("Reply not found");
+        } else if (reply.delete_password !== delete_password) {
+          res.status(400).send("Incorrect Password");
+        } else {
+          // Mark the reply as deleted by changing its text
+          reply.text = "[deleted]";
+          thread.save((err) => {
+            if (err) {
+              console.error(err);
+              res.status(500).send("Internal Server Error");
+            } else {
+              res.send("Reply deleted successfully");
             }
           });
         }
-      });
+      }
     });
+  });
+
+  // PUT request to report a reply
+  app.put("/api/replies/:board", (req, res) => {
+    const { board } = req.params;
+    const { thread_id, reply_id } = req.body;
+
+    // Find the thread by ID and mark the reply as reported
+    Thread.findOneAndUpdate(
+      { _id: thread_id, "replies._id": reply_id },
+      { $set: { "replies.$.reported": true } },
+      { new: true },
+      (err, updatedThread) => {
+        if (err) {
+          console.error(err);
+          res.status(500).send("Internal Server Error");
+        } else if (!updatedThread) {
+          res.status(404).send("Thread or Reply not found");
+        } else {
+          res.send("Reply reported");
+        }
+      }
+    );
+  });
 };
